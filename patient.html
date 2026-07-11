@@ -1,0 +1,150 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Patient Patch Simulator</title>
+    <style>
+        body {
+            max-width: 400px;
+            margin: auto;
+            font-family: sans-serif;
+            text-align: center;
+            padding: 20px;
+            background-color: #f4f4f9;
+        }
+
+        #alert-box {
+            padding: 20px;
+            color: white;
+            font-weight: bold;
+            margin-bottom: 20px;
+            display: none;
+            border-radius: 10px;
+        }
+
+        #water-icon {
+            display: none;
+            width: 150px;
+            margin: 20px auto;
+        }
+
+        .data-display {
+            font-size: 1.2em;
+            margin: 10px 0;
+            color: #333;
+        }
+
+        button {
+            padding: 15px;
+            background: red;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>Patient Patch</h1>
+    <div id="alert-box"></div>
+    <img id="water-icon" src="water.png" alt="Drink Water">
+    <div class="data-display">Monitoring in progress...</div>
+    <button onclick="sendForceAlert()">Emergency: Call Caregiver</button>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+    <script>
+        // Firebase configuration
+        const firebaseConfig = {
+            apiKey: "AIzaSyC06_AxWn8ARAp-TMpEBqKYuj6b5L_sguI",
+            authDomain: "hydromemory-14191.firebaseapp.com",
+            databaseURL: "https://hydromemory-14191-default-rtdb.firebaseio.com",
+            projectId: "hydromemory-14191",
+            storageBucket: "hydromemory-14191.firebasestorage.app",
+            messagingSenderId: "859458916013",
+            appId: "1:859458916013:web:1dbb7ee57c46826cb48024"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        // Main function to update sensor readings
+        function updateReadings() {
+            // First, check if there is an unacknowledged critical alert to prevent data refresh
+            db.ref('patient_status').once('value').then(snapshot => {
+                const currentStatus = snapshot.val();
+
+                // If an emergency is active, freeze the data generation
+                if (currentStatus && currentStatus.alertLevel === 'red' && currentStatus.acknowledged === false) {
+                    console.log("System frozen: Waiting for caregiver acknowledgement");
+                    return;
+                }
+
+                // Simulate physiological data
+                const data = {
+                    temp: (36 + Math.random() * 4).toFixed(1),
+                    pulse: Math.floor(60 + Math.random() * 80),
+                    sodium: Math.floor(130 + Math.random() * 20),
+                    conductivity: (Math.random() * 22).toFixed(1),
+                    sweat: (Math.random() * 2.5).toFixed(1),
+                    battery: Math.floor(Math.random() * 100),
+                    timestamp: Date.now()
+                };
+
+                // Logic based on requirements table
+                let alertLevel = 'green';
+                let instruction = "All systems normal.";
+
+                if (data.sodium > 145 || data.sodium < 135) { alertLevel = 'red'; instruction = "Sodium critical: please drink water & contact caregiver."; }
+                else if (data.sodium >= 140) { alertLevel = 'orange'; instruction = "High sodium: please drink water."; }
+                else if (data.conductivity < 2) { alertLevel = 'red'; instruction = "Conductivity critical: drink water & contact caregiver."; }
+                else if (data.conductivity > 20) { alertLevel = 'orange'; instruction = "Conductivity high: please seek medical advice."; }
+                else if (data.sweat > 2.0) { alertLevel = 'red'; instruction = "Critical sweating: drink water & contact caregiver."; }
+                else if (data.sweat > 1.0) { alertLevel = 'orange'; instruction = "Excessive sweating: drink water & rest."; }
+                else if (data.temp > 39) { alertLevel = 'red'; instruction = "High temp: drink water & contact caregiver."; }
+                else if (data.temp >= 37.5) { alertLevel = 'orange'; instruction = "Elevated temp: drink water & rest."; }
+                else if (data.pulse > 120) { alertLevel = 'red'; instruction = "High pulse: drink water & contact caregiver."; }
+                else if (data.pulse >= 100) { alertLevel = 'orange'; instruction = "Elevated pulse: drink water & rest."; }
+
+                // Update UI elements
+                const alertBox = document.getElementById('alert-box');
+                const waterIcon = document.getElementById('water-icon');
+
+                if (alertLevel !== 'green') {
+                    alertBox.style.display = 'block';
+                    alertBox.style.backgroundColor = (alertLevel === 'red') ? '#ff4d4d' : '#ffa500';
+                    alertBox.innerText = instruction;
+                    waterIcon.style.display = (instruction.includes("drink water")) ? 'block' : 'none';
+                    window.speechSynthesis.speak(new SpeechSynthesisUtterance(instruction));
+                } else {
+                    alertBox.style.display = 'none';
+                    waterIcon.style.display = 'none';
+                }
+
+                // Sync data to Firebase
+                db.ref('patient_status').update({
+                    ...data,
+                    alertLevel,
+                    instruction,
+                    acknowledged: (alertLevel === 'green')
+                });
+            });
+        }
+
+        // Manual emergency button trigger
+        function sendForceAlert() {
+            db.ref('patient_status').update({
+                alertLevel: 'red',
+                instruction: "Manual Emergency Alert!",
+                acknowledged: false
+            });
+        }
+
+        // Run simulation every 10 seconds for a smoother demo
+        setInterval(updateReadings, 10000);
+    </script>
+</body>
+</html>
