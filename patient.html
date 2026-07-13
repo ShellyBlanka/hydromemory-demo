@@ -1,0 +1,943 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0">
+
+    <title>HydroMemory - Patient App</title>
+
+    <style>
+        body {
+            max-width: 400px;
+            margin: auto;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            text-align: center;
+            background-color: #f4f4f9;
+        }
+
+        .project-title {
+            margin: 0 0 5px;
+            color: #0077b6;
+            font-size: 32px;
+            font-weight: bold;
+        }
+
+        h2 {
+            margin: 0 0 5px;
+            color: #333;
+        }
+
+        .welcome-text {
+            margin-top: 0;
+            margin-bottom: 20px;
+            color: #555;
+            font-size: 18px;
+        }
+
+        #connection-status,
+        #pairing-status {
+            margin-bottom: 12px;
+            font-weight: bold;
+        }
+
+        #connection-status {
+            color: #f0ad4e;
+        }
+
+        #pairing-status {
+            color: #d9534f;
+        }
+
+        #alert-box {
+            display: none;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-radius: 10px;
+            color: white;
+            font-weight: bold;
+        }
+
+        #battery-warning {
+            display: none;
+            padding: 12px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            color: #664d03;
+            background-color: #fff3cd;
+            font-weight: bold;
+        }
+
+        #water-icon {
+            display: none;
+            width: 120px;
+            height: auto;
+            margin: 15px auto;
+        }
+
+        .data-card {
+            padding: 15px;
+            margin: 15px 0;
+            background-color: white;
+            border-radius: 10px;
+            text-align: left;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .data-row {
+            margin: 10px 0;
+            font-size: 17px;
+        }
+
+        button {
+            width: 100%;
+            padding: 14px;
+            margin-top: 10px;
+            border: none;
+            border-radius: 6px;
+            color: white;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        #pair-btn {
+            background-color: #0275d8;
+        }
+
+        #pair-error-btn {
+            background-color: #6c757d;
+        }
+
+        #force-alert-btn {
+            background-color: #d9534f;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1 class="project-title">
+        HydroMemory
+    </h1>
+
+    <h2>Hello Orit</h2>
+
+    <p class="welcome-text">
+        Here are your latest health readings.
+    </p>
+
+    <div id="connection-status">
+        Connecting...
+    </div>
+
+    <div id="pairing-status">
+        Patch not paired
+    </div>
+
+    <div id="battery-warning"></div>
+
+    <div id="alert-box"></div>
+
+    <img id="water-icon"
+         src="water.png"
+         alt="Drink Water">
+
+    <div class="data-card">
+        <div class="data-row">
+            Body Temperature:
+            <span id="temp">--</span> °C
+        </div>
+
+        <div class="data-row">
+            Pulse:
+            <span id="pulse">--</span> bpm
+        </div>
+
+        <div class="data-row">
+            Sodium:
+            <span id="sodium">--</span> mmol/L
+        </div>
+
+        <div class="data-row">
+            Conductivity:
+            <span id="conductivity">--</span> µS
+        </div>
+
+        <div class="data-row">
+            Sweat Rate:
+            <span id="sweat">--</span> L/day
+        </div>
+
+        <div class="data-row">
+            Wristband Battery:
+            <span id="battery">--</span>%
+        </div>
+
+        <div class="data-row">
+            Today's Temperature:
+            <span id="ambientTemp">--</span> °C
+        </div>
+    </div>
+
+    <button id="pair-btn" onclick="pairPatch()">
+        Pair Patch
+    </button>
+
+    <button id="pair-error-btn" onclick="simulatePairingError()">
+        Simulate Pairing Error
+    </button>
+
+    <button id="force-alert-btn" onclick="sendForceAlert()">
+        Force Critical Alert
+    </button>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+    <script>
+        const firebaseConfig = {
+            apiKey: "AIzaSyC06_AxWn8ARAp-TMpEBqKYuj6b5L_sguI",
+            authDomain: "hydromemory-14191.firebaseapp.com",
+            databaseURL:
+                "https://hydromemory-14191-default-rtdb.firebaseio.com",
+            projectId: "hydromemory-14191",
+            storageBucket:
+                "hydromemory-14191.firebasestorage.app",
+            messagingSenderId: "859458916013",
+            appId:
+                "1:859458916013:web:1dbb7ee57c46826cb48024"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+
+        const db = firebase.database();
+
+        let patchPaired = false;
+        let criticalAlertActive = false;
+
+        let activeAlertId = null;
+        let activeAlertSource = "none";
+        let activeInstruction = "";
+        let activeWaterRequired = false;
+
+        let lastSpokenInstruction = "";
+
+        /*
+         * Stores the most recent wristband data.
+         * Wristband data continues updating even when the patch is disconnected.
+         */
+        let latestWristbandData = {
+            temp: null,
+            pulse: null,
+            battery: null,
+            ambientTemp: null
+        };
+
+        db.ref("patient_status").on(
+            "value",
+
+            function (snapshot) {
+                const status = snapshot.val();
+
+                const connectionStatus =
+                    document.getElementById("connection-status");
+
+                connectionStatus.innerText =
+                    "Connected to Firebase";
+
+                connectionStatus.style.color =
+                    "green";
+
+                if (!status) {
+                    return;
+                }
+
+                patchPaired =
+                    status.patchPaired === true;
+
+                criticalAlertActive =
+                    status.alertActive === true &&
+                    status.alertLevel === "red";
+
+                if (criticalAlertActive) {
+                    activeAlertId =
+                        status.alertId || null;
+
+                    activeAlertSource =
+                        status.alertSource || "sensor";
+
+                    activeInstruction =
+                        status.instruction ||
+                        "Critical alert: caregiver confirmation required.";
+
+                    activeWaterRequired =
+                        activeInstruction
+                            .toLowerCase()
+                            .includes("drink water");
+                } else {
+                    activeAlertId = null;
+                    activeAlertSource = "none";
+                    activeInstruction = "";
+                    activeWaterRequired = false;
+                }
+
+                updatePairingDisplay(status);
+            },
+
+            function (error) {
+                console.error(
+                    "Firebase connection error:",
+                    error
+                );
+
+                const connectionStatus =
+                    document.getElementById("connection-status");
+
+                connectionStatus.innerText =
+                    "Connection error";
+
+                connectionStatus.style.color =
+                    "#d9534f";
+            }
+        );
+
+        function pairPatch() {
+            const currentTime = Date.now();
+
+            patchPaired = true;
+
+            db.ref("patient_status").update({
+                patchPaired: true,
+                patchConnected: true,
+                pairingStatus: "connected",
+
+                /*
+                 * The patch timestamp is updated because pairing
+                 * represents renewed communication with the patch.
+                 */
+                patchTimestamp: currentTime,
+
+                /*
+                 * The application remains connected to Firebase.
+                 */
+                appConnected: true,
+                appTimestamp: currentTime,
+                timestamp: currentTime
+            });
+
+            updatePairingDisplay({
+                patchPaired: true,
+                pairingStatus: "connected"
+            });
+
+            updateReadings();
+        }
+
+        function simulatePairingError() {
+            const currentTime = Date.now();
+
+            patchPaired = false;
+
+            /*
+             * patchTimestamp is deliberately not updated here.
+             * The caregiver will detect that the patch has not sent
+             * new data for 25 seconds.
+             */
+            db.ref("patient_status").update({
+                patchPaired: false,
+                patchConnected: false,
+                pairingStatus: "error",
+
+                /*
+                 * The patient application is still connected.
+                 */
+                appConnected: true,
+                appTimestamp: currentTime,
+                timestamp: currentTime
+            });
+
+            updatePairingDisplay({
+                patchPaired: false,
+                pairingStatus: "error"
+            });
+
+            clearPatchDisplay();
+
+            /*
+             * Generate and send new wristband readings immediately.
+             */
+            updateReadings();
+        }
+
+        function updatePairingDisplay(status) {
+            const pairingStatus =
+                document.getElementById("pairing-status");
+
+            if (
+                status.patchPaired === true &&
+                status.pairingStatus === "connected"
+            ) {
+                pairingStatus.innerText =
+                    "Patch paired and active";
+
+                pairingStatus.style.color =
+                    "green";
+
+            } else if (
+                status.pairingStatus === "error"
+            ) {
+                pairingStatus.innerText =
+                    "Patch disconnected - wristband still active";
+
+                pairingStatus.style.color =
+                    "#d9534f";
+
+            } else {
+                pairingStatus.innerText =
+                    "Patch not paired";
+
+                pairingStatus.style.color =
+                    "#d9534f";
+            }
+        }
+
+        /*
+         * Generates only the data received from the wristband.
+         * These values continue updating when the patch is disconnected.
+         */
+        function generateWristbandData() {
+            return {
+                temp: Number(
+                    (36 + Math.random() * 4).toFixed(1)
+                ),
+
+                pulse: Math.floor(
+                    60 + Math.random() * 81
+                ),
+
+                battery: Math.floor(
+                    Math.random() * 101
+                ),
+
+                ambientTemp: Math.floor(
+                    20 + Math.random() * 15
+                )
+            };
+        }
+
+        /*
+         * Generates only the data received from the hydration patch.
+         */
+        function generatePatchData() {
+            return {
+                sodium: Math.floor(
+                    130 + Math.random() * 21
+                ),
+
+                conductivity: Number(
+                    (Math.random() * 22).toFixed(1)
+                ),
+
+                sweat: Number(
+                    (Math.random() * 2.5).toFixed(1)
+                )
+            };
+        }
+
+        function evaluateReadings(data) {
+            let alertLevel = "green";
+            let instruction = "All systems normal.";
+            let waterRequired = false;
+
+            /*
+             * Patch measurements are evaluated only if they are available.
+             */
+            if (
+                typeof data.sodium === "number" &&
+                (
+                    data.sodium > 145 ||
+                    data.sodium < 135
+                )
+            ) {
+                alertLevel = "red";
+                instruction =
+                    "Sodium critical: please drink water and contact caregiver.";
+                waterRequired = true;
+
+            } else if (
+                typeof data.conductivity === "number" &&
+                data.conductivity < 2
+            ) {
+                alertLevel = "red";
+                instruction =
+                    "Conductivity critical: drink water and contact caregiver.";
+                waterRequired = true;
+
+            } else if (
+                typeof data.sweat === "number" &&
+                data.sweat > 2.0
+            ) {
+                alertLevel = "red";
+                instruction =
+                    "Critical sweating: drink water and contact caregiver.";
+                waterRequired = true;
+
+                /*
+                 * Wristband measurements are always evaluated.
+                 */
+            } else if (
+                data.temp > 39
+            ) {
+                alertLevel = "red";
+                instruction =
+                    "High temperature: drink water and contact caregiver.";
+                waterRequired = true;
+
+            } else if (
+                data.pulse > 120
+            ) {
+                alertLevel = "red";
+                instruction =
+                    "High pulse: drink water and contact caregiver.";
+                waterRequired = true;
+
+            } else if (
+                typeof data.sodium === "number" &&
+                data.sodium >= 140 &&
+                data.sodium <= 145
+            ) {
+                alertLevel = "orange";
+                instruction =
+                    "High sodium: please drink water.";
+                waterRequired = true;
+
+            } else if (
+                typeof data.conductivity === "number" &&
+                (
+                    (
+                        data.conductivity >= 2 &&
+                        data.conductivity <= 4
+                    ) ||
+                    data.conductivity > 20
+                )
+            ) {
+                alertLevel = "orange";
+                instruction =
+                    "Conductivity abnormal: please seek medical advice.";
+
+            } else if (
+                typeof data.sweat === "number" &&
+                data.sweat > 1.0
+            ) {
+                alertLevel = "orange";
+                instruction =
+                    "Excessive sweating: drink water and rest.";
+                waterRequired = true;
+
+            } else if (
+                data.temp >= 37.5 &&
+                data.temp <= 39
+            ) {
+                alertLevel = "orange";
+                instruction =
+                    "Elevated temperature: drink water and rest.";
+                waterRequired = true;
+
+            } else if (
+                data.pulse >= 100 &&
+                data.pulse <= 120
+            ) {
+                alertLevel = "orange";
+                instruction =
+                    "Elevated pulse: drink water and rest.";
+                waterRequired = true;
+            }
+
+            return {
+                alertLevel,
+                instruction,
+                waterRequired
+            };
+        }
+
+        function updateReadings() {
+            const currentTime = Date.now();
+
+            /*
+             * Wristband readings are always generated.
+             */
+            const wristbandData =
+                generateWristbandData();
+
+            latestWristbandData =
+                wristbandData;
+
+            let patchData = {
+                sodium: null,
+                conductivity: null,
+                sweat: null
+            };
+
+            /*
+             * Patch readings are generated only while the patch is paired.
+             */
+            if (patchPaired) {
+                patchData =
+                    generatePatchData();
+            }
+
+            const data = {
+                ...wristbandData,
+                ...patchData,
+                timestamp: currentTime
+            };
+
+            let alert =
+                evaluateReadings(data);
+
+            if (criticalAlertActive) {
+                alert = {
+                    alertLevel: "red",
+                    instruction:
+                        activeInstruction,
+                    waterRequired:
+                        activeWaterRequired
+                };
+            }
+
+            if (
+                alert.alertLevel === "red" &&
+                !criticalAlertActive
+            ) {
+                const alertTime =
+                    Date.now();
+
+                criticalAlertActive = true;
+
+                activeAlertId =
+                    alertTime.toString();
+
+                activeAlertSource =
+                    "sensor";
+
+                activeInstruction =
+                    alert.instruction;
+
+                activeWaterRequired =
+                    alert.waterRequired;
+            }
+
+            updatePatientScreen(
+                data,
+                alert
+            );
+
+            /*
+             * Data that is always sent because it comes from the
+             * wristband or the patient application.
+             */
+            const firebaseUpdate = {
+                temp:
+                    data.temp,
+
+                pulse:
+                    data.pulse,
+
+                battery:
+                    data.battery,
+
+                ambientTemp:
+                    data.ambientTemp,
+
+                wristbandConnected:
+                    true,
+
+                wristbandTimestamp:
+                    currentTime,
+
+                /*
+                 * The patient application remains connected to Firebase,
+                 * even when the patch is disconnected.
+                 */
+                appConnected:
+                    true,
+
+                appTimestamp:
+                    currentTime,
+
+                timestamp:
+                    currentTime,
+
+                alertLevel:
+                    alert.alertLevel,
+
+                instruction:
+                    alert.instruction,
+
+                alertActive:
+                    alert.alertLevel === "red",
+
+                alertSource:
+                    alert.alertLevel === "red"
+                        ? activeAlertSource
+                        : "sensor",
+
+                alertId:
+                    alert.alertLevel === "red"
+                        ? activeAlertId
+                        : null,
+
+                alertTimestamp:
+                    alert.alertLevel === "red" &&
+                        activeAlertId
+                        ? Number(activeAlertId)
+                        : null,
+
+                acknowledged:
+                    false,
+
+                patchPaired:
+                    patchPaired,
+
+                patchConnected:
+                    patchPaired,
+
+                pairingStatus:
+                    patchPaired
+                        ? "connected"
+                        : "error"
+            };
+
+            if (patchPaired) {
+                /*
+                 * Patch fields and patchTimestamp are updated only when
+                 * actual patch readings are received.
+                 */
+                firebaseUpdate.sodium =
+                    data.sodium;
+
+                firebaseUpdate.conductivity =
+                    data.conductivity;
+
+                firebaseUpdate.sweat =
+                    data.sweat;
+
+                firebaseUpdate.patchTimestamp =
+                    currentTime;
+            } else {
+                /*
+                 * Null values indicate that current patch measurements
+                 * are unavailable.
+                 *
+                 * patchTimestamp is not changed, allowing the caregiver
+                 * screen to identify 25 seconds without patch updates.
+                 */
+                firebaseUpdate.sodium =
+                    null;
+
+                firebaseUpdate.conductivity =
+                    null;
+
+                firebaseUpdate.sweat =
+                    null;
+            }
+
+            db.ref("patient_status").update(
+                firebaseUpdate
+            );
+        }
+
+        function updatePatientScreen(data, alert) {
+            document.getElementById("temp").innerText =
+                data.temp;
+
+            document.getElementById("pulse").innerText =
+                data.pulse;
+
+            /*
+             * Patch data is displayed only if the patch is connected.
+             */
+            document.getElementById("sodium").innerText =
+                typeof data.sodium === "number"
+                    ? data.sodium
+                    : "--";
+
+            document.getElementById("conductivity").innerText =
+                typeof data.conductivity === "number"
+                    ? data.conductivity
+                    : "--";
+
+            document.getElementById("sweat").innerText =
+                typeof data.sweat === "number"
+                    ? data.sweat
+                    : "--";
+
+            document.getElementById("battery").innerText =
+                data.battery;
+
+            document.getElementById("ambientTemp").innerText =
+                data.ambientTemp;
+
+            const alertBox =
+                document.getElementById("alert-box");
+
+            const batteryWarning =
+                document.getElementById("battery-warning");
+
+            const waterIcon =
+                document.getElementById("water-icon");
+
+            if (data.battery <= 20) {
+                batteryWarning.style.display =
+                    "block";
+
+                batteryWarning.innerText =
+                    "Low Wristband Battery: Please charge the wristband.";
+            } else {
+                batteryWarning.style.display =
+                    "none";
+            }
+
+            if (alert.alertLevel === "green") {
+                alertBox.style.display =
+                    "none";
+
+                waterIcon.style.display =
+                    "none";
+
+                lastSpokenInstruction =
+                    "";
+
+                return;
+            }
+
+            alertBox.style.display =
+                "block";
+
+            alertBox.style.backgroundColor =
+                alert.alertLevel === "red"
+                    ? "#d9534f"
+                    : "#f0ad4e";
+
+            alertBox.innerText =
+                alert.instruction;
+
+            waterIcon.style.display =
+                alert.waterRequired
+                    ? "block"
+                    : "none";
+
+            if (
+                alert.instruction !==
+                lastSpokenInstruction
+            ) {
+                window.speechSynthesis.cancel();
+
+                const speech =
+                    new SpeechSynthesisUtterance(
+                        alert.instruction
+                    );
+
+                window.speechSynthesis.speak(
+                    speech
+                );
+
+                lastSpokenInstruction =
+                    alert.instruction;
+            }
+        }
+
+        function clearPatchDisplay() {
+            document.getElementById("sodium").innerText =
+                "--";
+
+            document.getElementById("conductivity").innerText =
+                "--";
+
+            document.getElementById("sweat").innerText =
+                "--";
+        }
+
+        function sendForceAlert() {
+            /*
+             * A manual alert is sent through the patient application,
+             * so it does not require the patch to be connected.
+             */
+            const alertTime =
+                Date.now();
+
+            criticalAlertActive =
+                true;
+
+            activeAlertId =
+                alertTime.toString();
+
+            activeAlertSource =
+                "manual";
+
+            activeInstruction =
+                "Manual emergency alert: contact the caregiver immediately.";
+
+            activeWaterRequired =
+                false;
+
+            db.ref("patient_status").update({
+                alertActive: true,
+                alertLevel: "red",
+                alertSource: "manual",
+                alertId: activeAlertId,
+                alertTimestamp: alertTime,
+                instruction:
+                    activeInstruction,
+                acknowledged: false,
+                escalationTriggered: false,
+
+                appConnected: true,
+                appTimestamp: alertTime,
+                timestamp: alertTime
+            });
+
+            const alertBox =
+                document.getElementById("alert-box");
+
+            alertBox.style.display =
+                "block";
+
+            alertBox.style.backgroundColor =
+                "#d9534f";
+
+            alertBox.innerText =
+                activeInstruction;
+
+            document.getElementById(
+                "water-icon"
+            ).style.display =
+                "none";
+
+            window.speechSynthesis.cancel();
+
+            window.speechSynthesis.speak(
+                new SpeechSynthesisUtterance(
+                    activeInstruction
+                )
+            );
+
+            lastSpokenInstruction =
+                activeInstruction;
+        }
+
+        /*
+         * Wristband and application data are updated every 15 seconds,
+         * regardless of the patch connection status.
+         */
+        setInterval(
+            updateReadings,
+            15000
+        );
+    </script>
+
+</body>
+</html>

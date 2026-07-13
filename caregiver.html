@@ -1,0 +1,823 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0">
+
+    <title>HydroMemory - Caregiver Dashboard</title>
+
+    <style>
+        body {
+            width: 90%;
+            margin: auto;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background-color: #f9f9f9;
+        }
+
+        .project-title {
+            margin: 0 0 5px;
+            color: #0077b6;
+            font-size: 34px;
+            font-weight: bold;
+        }
+
+        h2 {
+            margin: 0 0 5px;
+            color: #333;
+        }
+
+        .patient-name {
+            margin-top: 0;
+            margin-bottom: 20px;
+            color: #555;
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+        }
+
+        .status-box {
+            min-height: 290px;
+            padding: 25px;
+            color: white;
+            border-radius: 10px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .readings {
+            margin-top: 18px;
+            line-height: 1.8;
+            text-align: left;
+        }
+
+        .side-panel {
+            padding: 20px;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        #action-btn {
+            width: 100%;
+            padding: 18px;
+            margin-top: 20px;
+            border: none;
+            border-radius: 6px;
+            color: white;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        #connection-status {
+            margin-top: 10px;
+            font-weight: bold;
+            color: #f0ad4e;
+        }
+
+        #pairing-status {
+            margin-top: 10px;
+            font-weight: bold;
+        }
+
+        #sms-list {
+            padding-left: 20px;
+            color: #d9534f;
+        }
+
+        @media (max-width: 800px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1 class="project-title">
+        HydroMemory
+    </h1>
+
+    <h2>
+        Patient Monitoring Dashboard
+    </h2>
+
+    <p class="patient-name">
+        Patient: Orit
+    </p>
+
+    <div class="dashboard">
+
+        <div>
+            <div id="status-box"
+                 class="status-box"
+                 style="background-color: #6c757d;">
+                <div style="
+                        font-size: 26px;
+                        font-weight: bold;
+                    ">
+                    CONNECTING...
+                </div>
+
+                <div style="margin-top: 12px;">
+                    Connecting to the patient application.
+                </div>
+            </div>
+
+            <button id="action-btn"
+                    onclick="handleAction()"
+                    style="background-color: #6c757d;">
+                Waiting for Data
+            </button>
+        </div>
+
+        <div class="side-panel">
+            <h3>Patient App Connection</h3>
+
+            <div id="connection-status">
+                Connecting...
+            </div>
+
+            <h3>Patch Pairing</h3>
+
+            <div id="pairing-status">
+                Waiting for patch status...
+            </div>
+
+            <h3>Simulated SMS Notifications</h3>
+
+            <ul id="sms-list"></ul>
+        </div>
+
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+    <script>
+        const firebaseConfig = {
+            apiKey: "AIzaSyC06_AxWn8ARAp-TMpEBqKYuj6b5L_sguI",
+            authDomain: "hydromemory-14191.firebaseapp.com",
+            databaseURL:
+                "https://hydromemory-14191-default-rtdb.firebaseio.com",
+            projectId: "hydromemory-14191",
+            storageBucket:
+                "hydromemory-14191.firebasestorage.app",
+            messagingSenderId: "859458916013",
+            appId:
+                "1:859458916013:web:1dbb7ee57c46826cb48024"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+
+        const db = firebase.database();
+
+        let latestData = null;
+
+        let escalationTimer = null;
+        let timerAlertId = null;
+        let escalatedAlertId = null;
+
+        /*
+         * The patient application and the patch are checked separately.
+         */
+        const APP_DISCONNECT_TIMEOUT_MS =
+            25000;
+
+        const PATCH_DISCONNECT_TIMEOUT_MS =
+            25000;
+
+        db.ref("patient_status").on(
+            "value",
+
+            function (snapshot) {
+                latestData =
+                    snapshot.val();
+
+                if (!latestData) {
+                    showConnectingState();
+                    return;
+                }
+
+                renderDashboard(
+                    latestData
+                );
+            },
+
+            function (error) {
+                console.error(
+                    "Firebase connection error:",
+                    error
+                );
+
+                showDisconnectedState(
+                    "Unable to connect to Firebase."
+                );
+            }
+        );
+
+        function isPatientAppConnected(data) {
+            if (
+                !data ||
+                !data.appTimestamp
+            ) {
+                return false;
+            }
+
+            const elapsed =
+                Date.now() -
+                Number(data.appTimestamp);
+
+            return (
+                data.appConnected !== false &&
+                elapsed <= APP_DISCONNECT_TIMEOUT_MS
+            );
+        }
+
+        function isPatchConnected(data) {
+            if (
+                !data ||
+                data.patchPaired !== true ||
+                data.patchConnected === false ||
+                !data.patchTimestamp
+            ) {
+                return false;
+            }
+
+            const elapsed =
+                Date.now() -
+                Number(data.patchTimestamp);
+
+            return (
+                elapsed <= PATCH_DISCONNECT_TIMEOUT_MS
+            );
+        }
+
+        function renderDashboard(data) {
+            const statusBox =
+                document.getElementById("status-box");
+
+            const actionBtn =
+                document.getElementById("action-btn");
+
+            const pairingStatus =
+                document.getElementById("pairing-status");
+
+            const connectionStatus =
+                document.getElementById("connection-status");
+
+            const appConnected =
+                isPatientAppConnected(data);
+
+            /*
+             * The application must be disconnected only when appTimestamp
+             * has stopped updating.
+             */
+            if (!appConnected) {
+                showDisconnectedState(
+                    "No data transmission was received from the patient application."
+                );
+
+                return;
+            }
+
+            const patchConnected =
+                isPatchConnected(data);
+
+            const isCritical =
+                data.alertLevel === "red";
+
+            const isWarning =
+                data.alertLevel === "orange";
+
+            const isBatteryLow =
+                Number(data.battery) <= 20;
+
+            /*
+             * Patient application remains connected even when the patch
+             * is disconnected.
+             */
+            updateConnectionText(
+                data.appTimestamp
+            );
+
+            if (patchConnected) {
+                pairingStatus.innerText =
+                    "Patch paired successfully";
+
+                pairingStatus.style.color =
+                    "green";
+
+            } else {
+                pairingStatus.innerText =
+                    "Patch disconnected - wristband still active";
+
+                pairingStatus.style.color =
+                    "#d9534f";
+            }
+
+            let batteryWarning = "";
+
+            if (isBatteryLow) {
+                batteryWarning = `
+                        <div style="
+                            color: #fff3cd;
+                            font-weight: bold;
+                            margin-bottom: 10px;
+                        ">
+                            ⚠ Low Wristband Battery
+                            (${data.battery}%):
+                            Please charge the wristband.
+                        </div>
+                    `;
+            }
+
+            let patchWarning = "";
+
+            if (!patchConnected) {
+                patchWarning = `
+                        <div style="
+                            padding: 10px;
+                            margin-bottom: 12px;
+                            color: #664d03;
+                            background-color: #fff3cd;
+                            border-radius: 6px;
+                            font-weight: bold;
+                        ">
+                            ⚠ PATCH DISCONNECTED
+                            <br>
+                            No Sodium, Conductivity or Sweat Rate
+                            data is currently available.
+                            <br>
+                            Wristband monitoring continues normally.
+                        </div>
+                    `;
+            }
+
+            let title;
+
+            if (isCritical) {
+                title =
+                    "CRITICAL ALERT";
+
+                statusBox.style.backgroundColor =
+                    "#d9534f";
+
+            } else if (
+                isWarning ||
+                isBatteryLow ||
+                !patchConnected
+            ) {
+                title =
+                    "STANDARD ALERT";
+
+                statusBox.style.backgroundColor =
+                    "#f0ad4e";
+
+            } else {
+                title =
+                    "SYSTEM OPERATIONAL";
+
+                statusBox.style.backgroundColor =
+                    "#28a745";
+            }
+
+            const sodiumDisplay =
+                patchConnected &&
+                    data.sodium !== null &&
+                    data.sodium !== undefined
+                    ? data.sodium
+                    : "--";
+
+            const conductivityDisplay =
+                patchConnected &&
+                    data.conductivity !== null &&
+                    data.conductivity !== undefined
+                    ? data.conductivity
+                    : "--";
+
+            const sweatDisplay =
+                patchConnected &&
+                    data.sweat !== null &&
+                    data.sweat !== undefined
+                    ? data.sweat
+                    : "--";
+
+            statusBox.innerHTML = `
+                    ${batteryWarning}
+                    ${patchWarning}
+
+                    <div style="
+                        font-size: 26px;
+                        font-weight: bold;
+                    ">
+                        ${title}
+                    </div>
+
+                    <div style="margin-top: 12px;">
+                        ${data.instruction || ""}
+                    </div>
+
+                    <div class="readings">
+                        Body Temperature:
+                        ${data.temp ?? "--"} °C
+                        <br>
+
+                        Pulse:
+                        ${data.pulse ?? "--"} bpm
+                        <br>
+
+                        Sodium:
+                        ${sodiumDisplay} mmol/L
+                        <br>
+
+                        Conductivity:
+                        ${conductivityDisplay} µS
+                        <br>
+
+                        Sweat Rate:
+                        ${sweatDisplay} L/day
+                        <br>
+
+                        Wristband Battery:
+                        ${data.battery ?? "--"}%
+                        <br>
+
+                        Today's Temperature:
+                        ${data.ambientTemp ?? "--"} °C
+                    </div>
+                `;
+
+            if (
+                isCritical &&
+                data.alertActive === true
+            ) {
+                actionBtn.style.backgroundColor =
+                    "#d9534f";
+
+                actionBtn.innerText =
+                    "Confirm Critical Alert";
+
+                startEscalationTimer(
+                    data
+                );
+
+            } else {
+                actionBtn.style.backgroundColor =
+                    "#28a745";
+
+                actionBtn.innerText =
+                    "System Operational";
+
+                clearEscalationTimer();
+            }
+
+            connectionStatus.innerText =
+                "Patient app connected — last update " +
+                getSecondsAgo(data.appTimestamp) +
+                " seconds ago";
+
+            connectionStatus.style.color =
+                "green";
+        }
+
+        function startEscalationTimer(data) {
+            const alertId =
+                data.alertId ||
+                String(
+                    data.alertTimestamp ||
+                    data.appTimestamp ||
+                    data.timestamp
+                );
+
+            if (
+                escalationTimer &&
+                timerAlertId === alertId
+            ) {
+                return;
+            }
+
+            clearEscalationTimer();
+
+            timerAlertId =
+                alertId;
+
+            escalationTimer =
+                setTimeout(
+                    function () {
+                        verifyAlertAndSendSms(
+                            alertId
+                        );
+                    },
+                    10000
+                );
+        }
+
+        function verifyAlertAndSendSms(
+            expectedAlertId
+        ) {
+            db.ref("patient_status")
+                .once("value")
+                .then(function (snapshot) {
+                    const currentData =
+                        snapshot.val();
+
+                    escalationTimer =
+                        null;
+
+                    timerAlertId =
+                        null;
+
+                    if (!currentData) {
+                        return;
+                    }
+
+                    const currentAlertId =
+                        currentData.alertId ||
+                        String(
+                            currentData.alertTimestamp ||
+                            currentData.appTimestamp ||
+                            currentData.timestamp
+                        );
+
+                    const shouldSendSms =
+                        currentData.alertActive === true &&
+                        currentData.alertLevel === "red" &&
+                        currentData.acknowledged !== true &&
+                        currentAlertId === expectedAlertId;
+
+                    if (!shouldSendSms) {
+                        return;
+                    }
+
+                    if (
+                        escalatedAlertId ===
+                        currentAlertId
+                    ) {
+                        return;
+                    }
+
+                    const smsList =
+                        document.getElementById("sms-list");
+
+                    const listItem =
+                        document.createElement("li");
+
+                    listItem.innerText =
+                        "Simulated SMS sent: Emergency contact notified.";
+
+                    smsList.appendChild(
+                        listItem
+                    );
+
+                    escalatedAlertId =
+                        currentAlertId;
+
+                    db.ref("patient_status").update({
+                        escalationTriggered:
+                            true,
+
+                        escalationTimestamp:
+                            Date.now()
+                    });
+                })
+                .catch(function (error) {
+                    console.error(
+                        "SMS verification error:",
+                        error
+                    );
+                });
+        }
+
+        function clearEscalationTimer() {
+            if (escalationTimer) {
+                clearTimeout(
+                    escalationTimer
+                );
+            }
+
+            escalationTimer = null;
+            timerAlertId = null;
+        }
+
+        function handleAction() {
+            if (
+                !latestData ||
+                latestData.alertLevel !== "red" ||
+                latestData.alertActive !== true
+            ) {
+                return;
+            }
+
+            clearEscalationTimer();
+
+            db.ref("patient_status").update({
+                alertActive: false,
+                alertLevel: "green",
+                alertSource: "none",
+                alertId: null,
+                alertTimestamp: null,
+
+                instruction:
+                    "Critical alert acknowledged by caregiver.",
+
+                acknowledged: true,
+                acknowledgedAt: Date.now(),
+                escalationTriggered: false
+            });
+        }
+
+        function getSecondsAgo(timestamp) {
+            if (!timestamp) {
+                return 0;
+            }
+
+            return Math.max(
+                0,
+                Math.floor(
+                    (
+                        Date.now() -
+                        Number(timestamp)
+                    ) / 1000
+                )
+            );
+        }
+
+        function updateConnectionText(
+            appTimestamp
+        ) {
+            const connectionStatus =
+                document.getElementById("connection-status");
+
+            if (!appTimestamp) {
+                connectionStatus.innerText =
+                    "Connecting to patient app...";
+
+                connectionStatus.style.color =
+                    "#f0ad4e";
+
+                return;
+            }
+
+            const secondsAgo =
+                getSecondsAgo(appTimestamp);
+
+            connectionStatus.innerText =
+                "Patient app connected — last update " +
+                secondsAgo +
+                " seconds ago";
+
+            connectionStatus.style.color =
+                "green";
+        }
+
+        function checkConnections() {
+            if (
+                !latestData ||
+                !latestData.appTimestamp
+            ) {
+                showConnectingState();
+                return;
+            }
+
+            const appConnected =
+                isPatientAppConnected(
+                    latestData
+                );
+
+            /*
+             * Patient App Disconnected is displayed only when appTimestamp
+             * has stopped updating.
+             */
+            if (!appConnected) {
+                showDisconnectedState(
+                    "No data transmission was received from the patient application."
+                );
+
+                return;
+            }
+
+            /*
+             * Re-render every second so that a patch disconnect is detected
+             * after 25 seconds without a new patchTimestamp.
+             */
+            renderDashboard(
+                latestData
+            );
+        }
+
+        function showConnectingState() {
+            const statusBox =
+                document.getElementById("status-box");
+
+            const actionBtn =
+                document.getElementById("action-btn");
+
+            const connectionStatus =
+                document.getElementById("connection-status");
+
+            const pairingStatus =
+                document.getElementById("pairing-status");
+
+            statusBox.style.backgroundColor =
+                "#6c757d";
+
+            statusBox.innerHTML = `
+                    <div style="
+                        font-size: 26px;
+                        font-weight: bold;
+                    ">
+                        CONNECTING...
+                    </div>
+
+                    <div style="margin-top: 12px;">
+                        Connecting to the patient application.
+                    </div>
+                `;
+
+            connectionStatus.innerText =
+                "Connecting...";
+
+            connectionStatus.style.color =
+                "#f0ad4e";
+
+            pairingStatus.innerText =
+                "Waiting for patch status...";
+
+            pairingStatus.style.color =
+                "#f0ad4e";
+
+            actionBtn.style.backgroundColor =
+                "#6c757d";
+
+            actionBtn.innerText =
+                "Waiting for Data";
+        }
+
+        function showDisconnectedState(
+            message
+        ) {
+            const statusBox =
+                document.getElementById("status-box");
+
+            const actionBtn =
+                document.getElementById("action-btn");
+
+            const connectionStatus =
+                document.getElementById("connection-status");
+
+            clearEscalationTimer();
+
+            statusBox.style.backgroundColor =
+                "#6c757d";
+
+            statusBox.innerHTML = `
+                    <div style="
+                        font-size: 26px;
+                        font-weight: bold;
+                    ">
+                        PATIENT APP DISCONNECTED
+                    </div>
+
+                    <div style="margin-top: 12px;">
+                        ${message}
+                    </div>
+
+                    <div style="margin-top: 8px;">
+                        Please check the patient application connection.
+                    </div>
+                `;
+
+            connectionStatus.innerText =
+                "Connection lost: no data received from the patient app.";
+
+            connectionStatus.style.color =
+                "#d9534f";
+
+            actionBtn.style.backgroundColor =
+                "#6c757d";
+
+            actionBtn.innerText =
+                "Waiting for Reconnection";
+        }
+
+        setInterval(
+            checkConnections,
+            1000
+        );
+    </script>
+
+</body>
+</html>
